@@ -1,0 +1,68 @@
+name: Generer EFI OCLP pour MacBookPro8,1
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    steps:
+      - name: Recuperer les sources officielles OCLP 3.0.0 RC5
+        uses: actions/checkout@v4
+        with:
+          repository: dortania/OpenCore-Legacy-Patcher
+          ref: 3.0.0-rc.5
+          path: oclp
+
+      - name: Installer Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installer les dependances
+        working-directory: oclp
+        run: python3 -m pip install -r requirements.txt
+
+      - name: Construire OpenCore pour MacBookPro8,1
+        working-directory: oclp
+        run: python3 OpenCore-Patcher-GUI.command --build --model MacBookPro8,1 --verbose
+
+      - name: Assembler la cle EFI et verifier les fichiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE="oclp/Build-Folder/OpenCore-Build"
+          test -f "$SOURCE/EFI/OC/config.plist"
+          test -f "$SOURCE/EFI/OC/OpenCore.efi"
+          mkdir -p prepared/EFI/BOOT
+          cp -R "$SOURCE/EFI/OC" prepared/EFI/OC
+          if test -f "$SOURCE/EFI/BOOT/BOOTx64.efi"; then
+            cp "$SOURCE/EFI/BOOT/BOOTx64.efi" prepared/EFI/BOOT/BOOTx64.efi
+          elif test -f "$SOURCE/System/Library/CoreServices/boot.efi"; then
+            cp "$SOURCE/System/Library/CoreServices/boot.efi" prepared/EFI/BOOT/BOOTx64.efi
+          else
+            echo 'Fichier BOOTx64.efi introuvable: ne pas utiliser un EFI incomplet.' >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import plistlib
+          from pathlib import Path
+          path = Path('prepared/EFI/OC/config.plist')
+          with path.open('rb') as file:
+              cfg = plistlib.load(file)
+          cfg['Misc']['Boot']['ShowPicker'] = True
+          cfg['Misc']['Boot']['Timeout'] = 15
+          with path.open('wb') as file:
+              plistlib.dump(cfg, file, sort_keys=False)
+          PY
+          plutil -lint prepared/EFI/OC/config.plist
+          test -s prepared/EFI/BOOT/BOOTx64.efi
+          cd prepared
+          zip -qr ../EFI-OCLP-MacBookPro8-1.zip EFI
+
+      - name: Telecharger le resultat
+        uses: actions/upload-artifact@v4
+        with:
+          name: EFI-OCLP-MacBookPro8-1
+          path: EFI-OCLP-MacBookPro8-1.zip
+          if-no-files-found: error
